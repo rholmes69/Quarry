@@ -1,8 +1,9 @@
 # Quarry — a DB Browser for SQLite–style workbench in Rust
 
 A native desktop tool for creating, designing, browsing and editing SQLite
-databases, modelled on DB Browser for SQLite (DB4S). Single binary, SQLite
-compiled in — no JDBC drivers, no connection strings, no runtime to install.
+databases, modelled on DB Browser for SQLite (DB4S). One self-contained
+executable: SQLite with encryption, the GUI, server drivers and TLS are all
+compiled in — no installer, no JDBC/ODBC drivers, no OpenSSL, no VC++ runtime.
 
 ![Browse Data](docs/browse.png)
 
@@ -129,18 +130,81 @@ MariaDB** and **SQL Server / Azure SQL**, no ODBC/JDBC setup.
 
 ![Data Pipe](docs/data-pipe.png)
 
+**Encrypted databases (SQLCipher / wxSQLite3)** — Quarry is built on
+[SQLite3 Multiple Ciphers](https://utelle.github.io/SQLite3MultipleCiphers/)
+(the successor of wxSQLite3's codec, same author) instead of plain SQLite, so
+one binary reads *and writes*:
+
+| Format | Compatible with |
+|---|---|
+| ChaCha20-Poly1305 | sqleet; SQLite3MC default — recommended for new files |
+| AES-128-CBC / AES-256-CBC | wxSQLite3 |
+| SQLCipher 1.x, 2.x, 3.x, 4.x | Zetetic SQLCipher, DB4S's SQLCipher build, Android/iOS apps using SQLCipher |
+| RC4 | System.Data.SQLite (legacy) |
+| Ascon-128, AEGIS | modern lightweight AEAD ciphers |
+
+- Opening an encrypted file (from any open path, Recent list or command line)
+  shows a password prompt; **Auto-detect** tries every format, or pick one.
+  Passwords or raw hex keys (`PRAGMA hexkey`).
+- **Tools → Encryption…** encrypts a plain database, changes the password,
+  switches cipher (e.g. wxSQLite3 AES → SQLCipher 4), or removes encryption.
+  WAL databases are handled (switched to rollback mode for the rekey and back).
+  SQLCipher 1–3's 1024-byte pages are applied automatically for plain files;
+  Quarry refuses rather than silently writing a plaintext intermediate copy.
+- **File → New Encrypted Database…** creates one from scratch.
+- Passwords are never stored, and key material is masked in the SQL log
+  (`PRAGMA key = '••••••'`, also when you type key pragmas yourself).
+- SQLite temp files stay in memory (`SQLITE_TEMP_STORE=2`) and deleted
+  content is overwritten (`SQLITE_SECURE_DELETE`), so no plaintext leaks to disk.
+- Verified against the real SQLCipher 4.5.6 CLI in both directions.
+
+![Encryption](docs/encryption.png)
+
+**Custom collations** — every connection gets:
+- `NATURAL` / `NATURAL_NOCASE` (file2 < file10, v1.9 < v1.10),
+  `UNICODE_NOCASE` (case-insensitive for all scripts; SQLite's NOCASE is
+  ASCII-only), `UNICODE_CI_AI` (also accent-insensitive: Émile = emile),
+  `NUMERIC` (10 kg > 9 kg).
+- Your own, from **Tools → Collations…**: a base rule plus an explicit ranking
+  ("Low, Medium, High"), descending, whitespace-insensitive — with a live
+  preview, saved with Quarry's settings and available in every database (and
+  in the Create Table designer's new *Collate* column).
+- A safety net: databases created by other apps often use collations only that
+  app defines (Android's `LOCALIZED`/`UNICODE`…), which makes plain SQLite tools
+  fail with "no such collation sequence". Quarry substitutes a stand-in (you
+  choose its behaviour), keeps the data readable, and lists what it substituted.
+
+![Collations](docs/collations.png)
+
+**Standalone & portable**
+- One executable. SQLite3MC is compiled from the vendored amalgamation; TLS for
+  the server drivers is pure Rust (rustls), trusting the OS certificate store
+  plus Mozilla's roots built in. On Linux the binary needs only libc/libm/libgcc
+  (no `libssl`); Windows builds link the C runtime statically (no VC++
+  redistributable); macOS needs nothing beyond the OS.
+- **Portable mode**: put a `QuarryData` folder next to the executable (or use
+  *Tools → Portable Mode…*). Settings, recent files, connection profiles and
+  collations then live there, nothing is written to the user profile, and
+  recent files on the same drive are stored relative to the executable so a
+  USB stick works whatever drive letter it gets.
+- `scripts/package-portable.sh` / `.ps1` build ready-to-copy bundles;
+  `GLIBC=2.28 scripts/package-portable.sh` (with cargo-zigbuild) targets older
+  Linux distributions too.
+
 **Export** — table or query result → CSV (separator, quote char, quote-all,
 header, NULL text, LF/CRLF; reals at full precision, non-UTF-8 BLOBs as hex),
 and whole database → `.sql` dump.
 
 ## Build & run
 
-Requires Rust 1.85+ (edition 2024) and a C compiler for the bundled SQLite
+Requires Rust 1.85+ (edition 2024) and a C compiler for the vendored SQLite3MC
 (MSVC Build Tools on Windows, Xcode CLT on macOS, `build-essential` on Linux).
+`build.rs` compiles it with FTS3/4/5, R*Tree, Geopoly, JSON, math/string
+extension functions, REGEXP, UUID, SHA3, CSV and series virtual tables.
 
 ```bash
 cargo run --release -- path/to/database.db   # path is optional
-cargo test                                   # 32 tests
+cargo test                                   # 45 tests
 ```
 
 Server drivers are Cargo features (all on by default):
@@ -159,6 +223,10 @@ QUARRY_TEST_MYSQL=127.0.0.1:3306:test:me:secret \
 QUARRY_TEST_MSSQL=127.0.0.1:1433:test:sa:secret \
 cargo test live
 ```
+
+They also check TLS: with *trust server certificate* the session must be
+encrypted (verified server-side), and strict verification must reject a
+self-signed certificate.
 
 Each pushes a table full of awkward values (quotes, backslashes, Unicode,
 BLOBs, a big int, text in an INTEGER column), pulls it back and compares.
@@ -187,6 +255,9 @@ src/
   app.rs           menus, toolbar, tabs, status bar, pending-changes flow
   db.rs            rusqlite wrapper: logging, savepoints, schema, pragmas, WAL, dump
   csv_io.rs        CSV read/infer/convert/import/export
+  crypto.rs        ciphers, unlock/auto-detect, rekey, log redaction
+  collate.rs       built-in, user-defined and stand-in collations
+  config.rs        settings location, portable mode, recent files
   er.rs            ER model, auto layout, SVG / Mermaid / DOT export
   mock.rs          mock data generators, FK ordering, uniqueness
   plan.rs          EXPLAIN QUERY PLAN parsing, classification, index advice
@@ -194,6 +265,7 @@ src/
   pipe/pg.rs       PostgreSQL driver
   pipe/mysql.rs    MySQL / MariaDB driver
   pipe/mssql.rs    SQL Server driver
+  pipe/tls.rs      rustls configuration shared by the drivers
   ui/structure.rs  Database Structure tab
   ui/browse.rs     Browse Data tab + cell editor
   ui/execute.rs    Execute SQL tab
@@ -205,10 +277,13 @@ src/
   ui/mock.rs       Generate Mock Data dialog
   ui/plan_view.rs  painted query plan
   ui/pipe.rs       Data Pipe tab
+  ui/security.rs   unlock, encryption, collations and portable-mode windows
+build.rs           compiles SQLite3 Multiple Ciphers
+scripts/           portable packaging (Linux/macOS, Windows)
 ```
 
 Built with [egui/eframe](https://github.com/emilk/egui) 0.37,
-[rusqlite](https://github.com/rusqlite/rusqlite) 0.40 (SQLite 3.53 bundled),
+[rusqlite](https://github.com/rusqlite/rusqlite) 0.40 over [SQLite3 Multiple Ciphers](https://github.com/utelle/SQLite3MultipleCiphers) 2.5.1 (SQLite 3.53.4),
 [csv](https://github.com/BurntSushi/rust-csv), [rfd](https://github.com/PolyMeilex/rfd),
 [postgres](https://github.com/sfackler/rust-postgres), [mysql](https://github.com/blackbeam/rust-mysql-simple)
 and [tiberius](https://github.com/prisma/tiberius).
@@ -219,6 +294,6 @@ not yet been run against a live SQL Server.
 
 ## Not (yet) included vs DB4S
 
-Modify Table (ALTER-by-rebuild designer), SQLCipher encryption, plotting dock,
+Modify Table (ALTER-by-rebuild designer), plotting dock,
 DBHub, attaching databases from the UI (works via Execute SQL), JSON
 export, multiple SQL editor tabs, saved project files.

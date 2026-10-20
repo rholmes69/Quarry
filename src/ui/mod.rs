@@ -7,5 +7,6 @@ pub mod pipe;
 pub mod mock;
 pub mod plan_view;
 pub mod pragmas;
+pub mod security;
 pub mod structure;
 pub mod widgets;

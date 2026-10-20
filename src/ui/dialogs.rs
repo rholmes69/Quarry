@@ -176,6 +176,7 @@ pub struct ColDef {
     unique: bool,
     default: String,
     check: String,
+    collate: String,
 }
 
 impl ColDef {
@@ -189,6 +190,7 @@ impl ColDef {
             unique: false,
             default: String::new(),
             check: String::new(),
+            collate: String::new(),
         }
     }
 }
@@ -293,6 +295,9 @@ impl CreateTableDialog {
                 }
                 if !c.check.trim().is_empty() {
                     s.push_str(&format!(" CHECK({})", c.check.trim()));
+                }
+                if !c.collate.is_empty() {
+                    s.push_str(&format!(" COLLATE {}", c.collate));
                 }
                 s
             })
@@ -724,7 +729,7 @@ impl App {
                 let n = d.cols.len();
                 egui::ScrollArea::vertical().max_height(240.0).show(ui, |ui| {
                     egui::Grid::new("ct_cols").striped(true).spacing([8.0, 4.0]).show(ui, |ui| {
-                        for h in ["Name", "Type", "NN", "PK", "AI", "U", "Default", "Check", ""] {
+                        for h in ["Name", "Type", "NN", "PK", "AI", "U", "Default", "Check", "Collate", ""] {
                             ui.label(RichText::new(h).weak()).on_hover_text(match h {
                                 "NN" => "NOT NULL",
                                 "PK" => "PRIMARY KEY",
@@ -753,6 +758,26 @@ impl App {
                             ui.checkbox(&mut c.unique, "");
                             ui.add_sized([110.0, 22.0], egui::TextEdit::singleline(&mut c.default).hint_text("value"));
                             ui.add_sized([150.0, 22.0], egui::TextEdit::singleline(&mut c.check).hint_text("expression"));
+                            egui::ComboBox::from_id_salt(("ct_coll", i))
+                                .selected_text(if c.collate.is_empty() { "(default)" } else { &c.collate })
+                                .width(130.0)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut c.collate, String::new(), "(default)");
+                                    for n in ["BINARY", "NOCASE", "RTRIM"] {
+                                        ui.selectable_value(&mut c.collate, n.to_string(), n);
+                                    }
+                                    ui.separator();
+                                    for (n, desc) in crate::collate::BUILTINS {
+                                        ui.selectable_value(&mut c.collate, n.to_string(), n).on_hover_text(desc);
+                                    }
+                                    let user = crate::collate::user_defs();
+                                    if !user.is_empty() {
+                                        ui.separator();
+                                    }
+                                    for d in user {
+                                        ui.selectable_value(&mut c.collate, d.name.clone(), d.name);
+                                    }
+                                });
                             ui.horizontal(|ui| {
                                 if ui.add_enabled(i > 0, egui::Button::new("▲").small()).clicked() {
                                     swap = Some((i, i - 1));

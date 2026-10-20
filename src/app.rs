@@ -32,6 +32,7 @@ pub enum Deferred {
     Close,
     Open(PathBuf, bool),
     New(PathBuf),
+    NewEncrypted(PathBuf),
     Quit,
 }
 
@@ -62,6 +63,11 @@ pub struct App {
     pub confirm: Option<Confirm>,
     pub open_path: Option<(String, bool)>,
     pub about: bool,
+    pub unlock: Option<crate::ui::security::UnlockDialog>,
+    pub encryption_dlg: Option<crate::ui::security::EncryptionDialog>,
+    pub collations_dlg: Option<crate::ui::security::CollationsDialog>,
+    pub portable_dlg: bool,
+    pub recent: Vec<PathBuf>,
 
     pub errors: Vec<String>,
     pub status: Option<(String, Instant)>,
@@ -76,6 +82,11 @@ impl App {
         style.spacing.item_spacing = egui::vec2(8.0, 5.0);
         style.spacing.button_padding = egui::vec2(8.0, 3.0);
         cc.egui_ctx.set_global_style(style);
+        match crate::config::setting("theme").as_deref() {
+            Some("light") => cc.egui_ctx.set_theme(egui::ThemePreference::Light),
+            Some("dark") => cc.egui_ctx.set_theme(egui::ThemePreference::Dark),
+            _ => {}
+        }
 
         let mut app = App {
             db: None,
@@ -97,6 +108,11 @@ impl App {
             confirm: None,
             open_path: None,
             about: false,
+            unlock: None,
+            encryption_dlg: None,
+            collations_dlg: None,
+            portable_dlg: false,
+            recent: crate::config::recent_files(),
             errors: Vec::new(),
             status: None,
             allow_quit: false,
@@ -171,6 +187,13 @@ impl App {
                 self.open_db(p, false);
                 self.create_table = Some(CreateTableDialog::default());
             }
+            Deferred::NewEncrypted(p) => {
+                let _ = std::fs::remove_file(&p);
+                self.open_db(p, false);
+                if self.db.is_some() {
+                    self.encryption_dlg = Some(crate::ui::security::EncryptionDialog::new(None));
+                }
+            }
             Deferred::Quit => {
                 self.allow_quit = true;
             }
@@ -179,21 +202,32 @@ impl App {
 
     pub fn open_db(&mut self, path: PathBuf, read_only: bool) {
         self.close_db();
+        if crate::crypto::looks_encrypted(&path) {
+            self.unlock = Some(crate::ui::security::UnlockDialog::new(path, read_only));
+            return;
+        }
         match Database::open(&path, read_only) {
-            Ok(db) => {
-                self.db = Some(db);
-                self.tab = Tab::Structure;
-                self.browse = BrowseState::default();
-                self.structure = StructureState::default();
-                self.pragmas = PragmaState::default();
-                self.er = ErState::default();
-                self.exec.outcomes.clear();
-                self.exec.result = None;
-                self.refresh_schema();
-                self.notify(format!("Opened {}", path.display()));
-            }
+            Ok(db) => self.install_db(db),
             Err(e) => self.error(format!("Could not open {}:\n{e}", path.display())),
         }
+    }
+
+    /// Make an opened database current (plain or unlocked).
+    pub fn install_db(&mut self, db: Database) {
+        let path = db.path.clone();
+        let lock = db.encryption.map(|c| format!(" 🔒 {}", c.short())).unwrap_or_default();
+        self.db = Some(db);
+        self.tab = Tab::Structure;
+        self.browse = BrowseState::default();
+        self.structure = StructureState::default();
+        self.pragmas = PragmaState::default();
+        self.er = ErState::default();
+        self.exec.outcomes.clear();
+        self.exec.result = None;
+        self.refresh_schema();
+        crate::config::push_recent(&path);
+        self.recent = crate::config::recent_files();
+        self.notify(format!("Opened {}{lock}", path.display()));
     }
 
     pub fn close_db(&mut self) {
@@ -263,6 +297,17 @@ impl App {
             // No portal/file chooser available (e.g. minimal Linux setups):
             // fall back to typing a path.
             None => {}
+        }
+    }
+
+    fn pick_new_encrypted(&mut self) {
+        if let Some(p) = rfd::FileDialog::new()
+            .set_title("New Encrypted Database")
+            .set_file_name("secure.db")
+            .add_filter("SQLite databases", &["db", "sqlite", "sqlite3"])
+            .save_file()
+        {
+            self.request(Deferred::NewEncrypted(p));
         }
     }
 
@@ -353,6 +398,24 @@ impl App {
                     self.pick_open(true);
                     ui.close();
                 }
+                if ui.button("New Encrypted Database…").clicked() {
+                    self.pick_new_encrypted();
+                    ui.close();
+                }
+                ui.menu_button("Open Recent", |ui| {
+                    if self.recent.is_empty() {
+                        ui.label(RichText::new("(none yet)").weak());
+                    }
+                    for p in self.recent.clone() {
+                        let name = p.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_default();
+                        let enc = crate::crypto::looks_encrypted(&p);
+                        let label = format!("{}{name}", if enc { "🔒 " } else { "" });
+                        if ui.add_enabled(p.exists(), egui::Button::new(label)).on_hover_text(p.display().to_string()).clicked() {
+                            self.request(Deferred::Open(p, false));
+                            ui.close();
+                        }
+                    }
+                });
                 if ui.button("Open by Path…").clicked() {
                     self.open_path = Some((String::new(), false));
                     ui.close();
@@ -409,6 +472,22 @@ impl App {
                     ui.close();
                 }
             });
+            ui.menu_button("Tools", |ui| {
+                let can_crypt = has_db && !self.db.as_ref().unwrap().read_only;
+                if ui.add_enabled(can_crypt, egui::Button::new("🔒 Encryption…")).clicked() {
+                    self.encryption_dlg = Some(crate::ui::security::EncryptionDialog::new(self.db.as_ref().and_then(|d| d.encryption)));
+                    ui.close();
+                }
+                if ui.button("Collations…").clicked() {
+                    self.collations_dlg = Some(crate::ui::security::CollationsDialog::new());
+                    ui.close();
+                }
+                ui.separator();
+                if ui.button("Portable Mode…").clicked() {
+                    self.portable_dlg = true;
+                    ui.close();
+                }
+            });
             ui.menu_button("View", |ui| {
                 ui.checkbox(&mut self.log_ui.visible, "SQL Log  (Ctrl+L)");
                 if ui.button("Refresh  (Ctrl+R)").clicked() {
@@ -423,6 +502,16 @@ impl App {
                     ui.selectable_value(&mut pref, egui::ThemePreference::Light, "Light");
                     ui.selectable_value(&mut pref, egui::ThemePreference::Dark, "Dark");
                 });
+                if pref != ui.ctx().options(|o| o.theme_preference) {
+                    crate::config::set_setting(
+                        "theme",
+                        match pref {
+                            egui::ThemePreference::Light => "light",
+                            egui::ThemePreference::Dark => "dark",
+                            _ => "system",
+                        },
+                    );
+                }
                 ui.ctx().set_theme(pref);
             });
             ui.menu_button("Help", |ui| {
@@ -478,6 +567,9 @@ impl App {
                     if db.read_only {
                         ui.label(RichText::new("READ-ONLY").small().color(p.warn));
                     }
+                    if let Some(c) = db.encryption {
+                        ui.label(RichText::new(format!("🔒 {}", c.short())).small().color(p.ok));
+                    }
                     ui.separator();
                     let jm = self.pragmas.journal_mode_cache.clone().unwrap_or_else(|| {
                         let v = db.get_pragma("journal_mode").map(|v| as_text(&v)).unwrap_or_default();
@@ -494,7 +586,10 @@ impl App {
                 }
             }
             ui.separator();
-            ui.label(RichText::new(format!("SQLite {}", self.sqlite_version)).small().weak());
+            ui.label(RichText::new(format!("SQLite {} · SQLite3MC {}", self.sqlite_version, env!("QUARRY_SQLITE3MC_VERSION"))).small().weak());
+            if crate::config::is_portable() {
+                ui.label(RichText::new("PORTABLE").small().color(p.app));
+            }
             if let Some((msg, t)) = &self.status {
                 if t.elapsed().as_secs() < 8 {
                     ui.separator();
@@ -669,7 +764,8 @@ impl App {
                 .show(ctx, |ui| {
                     ui.heading("Quarry");
                     ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
-                    ui.label(format!("SQLite {}", rusqlite::version()));
+                    ui.label(format!("SQLite {} with SQLite3 Multiple Ciphers {}", rusqlite::version(), env!("QUARRY_SQLITE3MC_VERSION")));
+                    ui.label("Ciphers: ChaCha20, AES-128/256 (wxSQLite3), SQLCipher 1–4, RC4, Ascon-128, AEGIS");
                     ui.label("A visual tool for creating, designing and editing SQLite databases,");
                     ui.label("modelled on DB Browser for SQLite. Built with Rust, egui and rusqlite.");
                 });
@@ -727,6 +823,7 @@ impl eframe::App for App {
         });
 
         self.dialogs(&ctx);
+        self.security_windows(&ctx);
         self.modals(&ctx);
     }
 }

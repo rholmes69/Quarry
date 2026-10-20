@@ -38,12 +38,8 @@ impl Pg {
             TlsMode::Disable => cfg.connect(NoTls).map_err(err)?,
             TlsMode::Require => {
                 cfg.ssl_mode(postgres::config::SslMode::Require);
-                let connector = native_tls::TlsConnector::builder()
-                    .danger_accept_invalid_certs(spec.trust_cert)
-                    .danger_accept_invalid_hostnames(spec.trust_cert)
-                    .build()
-                    .map_err(|e| e.to_string())?;
-                cfg.connect(postgres_native_tls::MakeTlsConnector::new(connector)).map_err(err)?
+                let tls = tokio_postgres_rustls::MakeRustlsConnect::new(super::tls::client_config(spec.trust_cert));
+                cfg.connect(tls).map_err(err)?
             }
         };
         Ok(Pg { client })

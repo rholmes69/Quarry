@@ -31,6 +31,8 @@ mod mssql;
 mod mysql;
 #[cfg(feature = "pg")]
 mod pg;
+#[cfg(feature = "tls")]
+pub mod tls;
 
 // ---------------------------------------------------------------------------
 // Connection settings
@@ -198,11 +200,7 @@ impl ConnSpec {
 // ---------------------------------------------------------------------------
 
 pub fn profiles_path() -> Option<std::path::PathBuf> {
-    let base = std::env::var_os("APPDATA")
-        .map(std::path::PathBuf::from)
-        .or_else(|| std::env::var_os("XDG_CONFIG_HOME").map(std::path::PathBuf::from))
-        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))?;
-    Some(base.join("quarry").join("connections.tsv"))
+    crate::config::data_dir().map(|d| d.join("connections.tsv"))
 }
 
 pub fn load_profiles() -> Vec<(String, ConnSpec)> {
@@ -355,6 +353,8 @@ pub trait Remote {
 }
 
 pub fn connect(spec: &ConnSpec) -> Result<Box<dyn Remote>> {
+    #[cfg(feature = "tls")]
+    tls::install_provider();
     if !spec.kind.compiled_in() {
         return Err(format!("{} support isn't compiled into this build.", spec.kind.label()));
     }
@@ -813,6 +813,34 @@ mod tests_live {
         let mut remote = connect(&s).unwrap();
         remote.execute(&format!("DROP TABLE {}", s.kind.quote(&table))).unwrap();
         remote.execute(&format!("DROP TABLE {}", s.kind.quote(&format!("{table}_x")))).unwrap();
+    }
+
+    /// TLS: "trust server certificate" connects over an encrypted session;
+    /// strict verification must refuse the self-signed test certificate.
+    fn tls_check(mut s: ConnSpec, probe: &str) {
+        s.tls = TlsMode::Require;
+        s.trust_cert = true;
+        let mut r = connect(&s).expect("TLS with trust_cert");
+        let t = r.query(probe).unwrap();
+        let v = crate::db::as_text(&t.rows[0][t.columns.len() - 1]).to_lowercase();
+        assert!(v == "true" || v == "1" || v.starts_with("tls"), "session not encrypted: {v:?}");
+        s.trust_cert = false;
+        let err = connect(&s).err().expect("self-signed cert must be rejected without trust_cert");
+        assert!(err.to_lowercase().contains("certificate") || err.to_lowercase().contains("tls") || err.to_lowercase().contains("ssl"), "{err}");
+    }
+
+    #[test]
+    fn live_postgres_tls() {
+        if let Some(s) = spec("QUARRY_TEST_PG", Kind::Postgres) {
+            tls_check(s, "SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()");
+        }
+    }
+
+    #[test]
+    fn live_mysql_tls() {
+        if let Some(s) = spec("QUARRY_TEST_MYSQL", Kind::MySql) {
+            tls_check(s, "SHOW SESSION STATUS LIKE 'Ssl_version'");
+        }
     }
 
     #[test]

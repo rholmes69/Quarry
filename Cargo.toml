@@ -12,22 +12,27 @@ eframe = { version = "0.37", features = ["glow"] }
 egui_extras = "0.37"
 egui = "0.37"
 rfd = "0.17"
-rusqlite = { version = "0.40", features = ["bundled", "column_decltype"] }
+rusqlite = { version = "0.40", default-features = false, features = ["in_gecko", "column_decltype", "collation", "functions", "cache"] }
 
 # Enterprise server drivers for Data Pipe (disable with --no-default-features)
 postgres = { version = "0.19", optional = true }
-postgres-native-tls = { version = "0.5", optional = true }
-native-tls = { version = "0.2", optional = true }
-mysql = { version = "28", default-features = false, features = ["default-rust", "native-tls"], optional = true }
-tiberius = { version = "0.13", default-features = false, features = ["tds73", "native-tls", "chrono"], optional = true }
+tokio-postgres-rustls = { version = "0.14", default-features = false, features = ["ring"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"], optional = true }
+rustls-native-certs = { version = "0.8", optional = true }
+webpki-roots = { version = "1", optional = true }
+mysql = { version = "28", default-features = false, features = ["default-rust", "rustls-tls-ring"], optional = true }
+tiberius = { version = "0.13", default-features = false, features = ["tds73", "rustls", "chrono"], optional = true }
 tokio = { version = "1", features = ["rt", "net", "time"], optional = true }
 tokio-util = { version = "0.7", features = ["compat"], optional = true }
+unicode-normalization = "0.1.26"
 
 [features]
 default = ["pg", "mysql-driver", "mssql"]
-pg = ["dep:postgres", "dep:postgres-native-tls", "dep:native-tls"]
-mysql-driver = ["dep:mysql"]
-mssql = ["dep:tiberius", "dep:tokio", "dep:tokio-util"]
+pg = ["dep:postgres", "dep:tokio-postgres-rustls", "tls"]
+mysql-driver = ["dep:mysql", "tls"]
+mssql = ["dep:tiberius", "dep:tokio", "dep:tokio-util", "tls"]
+# Pure-Rust TLS (rustls + ring): no OpenSSL to install on any OS.
+tls = ["dep:rustls", "dep:rustls-native-certs", "dep:webpki-roots"]
 
 [dev-dependencies]
 tempfile = "3.27.0"
@@ -35,3 +40,9 @@ tempfile = "3.27.0"
 [profile.release]
 strip = true
 opt-level = 3
+lto = "thin"
+codegen-units = 4
+
+[build-dependencies]
+cc = "1.9.0"
+sqlite3mc-src = "205.1.0"

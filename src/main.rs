@@ -2,6 +2,9 @@
 //! Quarry — a DB Browser for SQLite–style workbench written in Rust.
 
 mod app;
+mod collate;
+mod config;
+mod crypto;
 mod csv_io;
 mod db;
 mod er;

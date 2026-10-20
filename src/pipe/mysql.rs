@@ -33,7 +33,11 @@ impl My {
             .db_name((!spec.database.is_empty()).then(|| spec.database.clone()))
             .tcp_connect_timeout(Some(std::time::Duration::from_secs(10)));
         if spec.tls == TlsMode::Require {
-            opts = opts.ssl_opts(SslOpts::default().with_danger_accept_invalid_certs(spec.trust_cert));
+            // the driver would otherwise switch to the local Unix socket for
+            // localhost — which bypasses TLS
+            opts = opts
+                .prefer_socket(false)
+                .ssl_opts(SslOpts::default().with_danger_accept_invalid_certs(spec.trust_cert));
         }
         let mut conn = Conn::new(opts).map_err(err)?;
         // predictable text: UTF-8 everywhere, ANSI-ish behaviour for our literals

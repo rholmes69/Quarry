@@ -169,10 +169,26 @@ pub struct Database {
     pub read_only: bool,
     pub log: Vec<LogEntry>,
     savepoint_active: bool,
+    /// Cipher the file is encrypted with, if any.
+    pub encryption: Option<crate::crypto::Cipher>,
 }
 
 impl Database {
     pub fn open(path: &Path, read_only: bool) -> Result<Self> {
+        let mut db = Database::open_raw(path, read_only)?;
+        // Touch the schema so a bad/non-SQLite/encrypted file errors out immediately.
+        db.query(LogSource::App, "SELECT COUNT(*) FROM sqlite_schema;", &[]).map_err(|e| {
+            if e.contains("not a database") && crate::crypto::looks_encrypted(path) {
+                "This database is encrypted — use File → Open Encrypted Database… and enter its password.".to_string()
+            } else {
+                e
+            }
+        })?;
+        Ok(db)
+    }
+
+    /// Open the file without reading it (encrypted files need a key first).
+    pub fn open_raw(path: &Path, read_only: bool) -> Result<Self> {
         let flags = if read_only {
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI
         } else {
@@ -181,27 +197,28 @@ impl Database {
                 | OpenFlags::SQLITE_OPEN_URI
         };
         let conn = Connection::open_with_flags(path, flags).map_err(|e| e.to_string())?;
-        let mut db = Database {
+        crate::collate::install(&conn)?;
+        Ok(Database {
             conn,
             path: path.to_path_buf(),
             read_only,
             log: Vec::new(),
             savepoint_active: false,
-        };
-        // Touch the schema so a bad/non-SQLite file errors out immediately.
-        db.query(LogSource::App, "SELECT COUNT(*) FROM sqlite_schema;", &[])?;
-        Ok(db)
+            encryption: None,
+        })
     }
 
     #[allow(dead_code)]
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory().map_err(|e| e.to_string())?;
+        crate::collate::install(&conn)?;
         Ok(Database {
             conn,
             path: PathBuf::from(":memory:"),
             read_only: false,
             log: Vec::new(),
             savepoint_active: false,
+            encryption: None,
         })
     }
 
@@ -218,7 +235,7 @@ impl Database {
         self.log.push(LogEntry {
             time: chrono::Local::now().format("%H:%M:%S%.3f").to_string(),
             source,
-            sql: sql.trim().to_string(),
+            sql: crate::crypto::redact(sql.trim()),
             ok,
             millis,
             detail,
