@@ -247,6 +247,9 @@ impl App {
             if ui.add_enabled(can_edit && sel_row.is_some(), egui::Button::new("➖ Delete Record")).clicked() {
                 self.delete_record(sel_row.unwrap());
             }
+            if ui.add_enabled(can_edit, egui::Button::new("🎲 Mock Data")).clicked() {
+                self.open_mock(self.browse.table.clone());
+            }
             ui.separator();
             if ui.button("Export CSV…").clicked() {
                 self.export = Some(ExportDialog::new(ExportSource::Table(current.clone())));

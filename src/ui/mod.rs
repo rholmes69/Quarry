@@ -1,7 +1,11 @@
 pub mod browse;
 pub mod dialogs;
+pub mod er;
 pub mod execute;
 pub mod log;
+pub mod pipe;
+pub mod mock;
+pub mod plan_view;
 pub mod pragmas;
 pub mod structure;
 pub mod widgets;

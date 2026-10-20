@@ -59,6 +59,76 @@ message while changes are pending, and you're prompted before closing.
   or by position. The import runs in its own savepoint — an abort leaves the
   database untouched — and a success is still revertible.
 
+**ER Diagram** — generated automatically from the foreign keys SQLite reports
+(`PRAGMA foreign_key_list`), including composite and self-referencing keys.
+Parents are laid out left of their children, ordered to reduce crossing lines;
+unrelated tables are parked below. Crow's-foot notation: many vs. one (UNIQUE
+FK → 1:1), dashed lines for optional (nullable) FKs, red for FKs pointing at a
+missing table. Pan, zoom, drag tables, hover to highlight a table's
+relationships, double-click to open it, "keys only" mode, live row counts.
+Export to **SVG** (uses your current arrangement), or copy **Mermaid**
+`erDiagram` (pastes into GitHub, GitLab, Notion, Confluence) or Graphviz **DOT**.
+
+![ER diagram](docs/er-diagram.png)
+
+**Mock Data** — fill one table or a whole schema with realistic test rows.
+- A generator is picked per column from its name, type, default and
+  constraints: `email` → email, `first_name`, `phone`, `zip`, `dob`, `*_at`
+  timestamps, money columns, `status` choices, `npi`/`mrn`/`code` patterns,
+  booleans, UUIDs, lorem text… 28 generators, each tweakable (ranges, date
+  spans, choice lists, `MRN######`-style patterns, NULL %).
+- Foreign keys sample keys that really exist in the parent table; multi-table
+  runs insert **parents first** (and "Include empty parent tables" ticks them
+  for you), so referential integrity holds.
+- UNIQUE / PRIMARY KEY groups — composite ones too — are enforced, seeded with
+  the values already in the table.
+- Values are typed for the column's affinity, so STRICT tables work.
+- **Seeded**: the same seed and plan always produce the same data.
+- Mock data can't collide with real people: emails use the reserved
+  `example.com/.org/.net` domains, phones the fictional 555-01xx range,
+  SSN-shaped patterns a `000` prefix.
+- Everything lands in one savepoint — Revert removes it all.
+
+![Mock data](docs/mock-data.png)
+
+**Visual query plan** — in Execute SQL press **🔍 Explain plan** (Ctrl+E) for
+the statement under the cursor. Quarry runs `EXPLAIN QUERY PLAN`, draws the
+plan as a colour-coded tree (key lookup / index search / covering scan /
+index scan / full scan / automatic index / temp B-tree sort / subqueries), shows
+each table's row count and which loops are nested, and gives a verdict.
+Findings explain problems in plain language and propose concrete indexes:
+- *automatic index* → SQLite tells us the columns; suggest a permanent one,
+- full scan of a filtered table → index on the WHERE columns, equality
+  columns first (`(cpt, charge)` for `cpt = ? AND charge > ?`),
+- nested full scan in a join → index on the join column,
+- temp B-tree for ORDER BY → index matching the sort,
+- correlated subqueries → rewrite as JOIN.
+
+One click opens Create Index pre-filled; re-explain to confirm SQLite uses it.
+
+![Query plan](docs/query-plan.png)
+
+**Data Pipe** — move data between SQLite and **PostgreSQL**, **MySQL /
+MariaDB** and **SQL Server / Azure SQL**, no ODBC/JDBC setup.
+- *Pull* a remote table or any query (optional row limit) into a new, replaced
+  or appended SQLite table. Values are read in their exact text form; SQLite
+  types are inferred from the data, so a `numeric(30,10)` that doesn't fit a
+  double stays exact TEXT, money becomes REAL, bool → INTEGER, bytea/varbinary
+  → BLOB, uuid/timestamps → TEXT.
+- *Push* a SQLite table or query to the server: *create or append*, *empty then
+  load*, or *drop & recreate*. Remote column types are inferred from what's
+  actually stored — SQLite lets an INTEGER column hold `'n/a'`; Quarry notices,
+  widens that column to a text type and tells you, instead of failing on row
+  40,000. *Preview type mapping* shows the plan first. Primary keys carry over.
+- Rows go in batched multi-row INSERTs inside **one remote transaction** —
+  all or nothing. Pulls land in a SQLite savepoint — revertible.
+- Runs on a background thread with a progress bar; the UI stays responsive.
+- Every statement sent to the server appears in the SQL Log tagged **Remote**.
+- TLS (with optional "trust server certificate"), saved connection profiles —
+  **passwords are never written to disk**.
+
+![Data Pipe](docs/data-pipe.png)
+
 **Export** — table or query result → CSV (separator, quote char, quote-all,
 header, NULL text, LF/CRLF; reals at full precision, non-UTF-8 BLOBs as hex),
 and whole database → `.sql` dump.
@@ -70,8 +140,28 @@ Requires Rust 1.85+ (edition 2024) and a C compiler for the bundled SQLite
 
 ```bash
 cargo run --release -- path/to/database.db   # path is optional
-cargo test                                   # 13 tests: DB layer, CSV, SQL gen
+cargo test                                   # 32 tests
 ```
+
+Server drivers are Cargo features (all on by default):
+
+```bash
+cargo build --release --no-default-features              # SQLite only
+cargo build --release --no-default-features --features pg,mysql-driver
+```
+
+Live Data Pipe tests run against real servers when you point them at one
+(format `host:port:database:user:password`):
+
+```bash
+QUARRY_TEST_PG=127.0.0.1:5432:test:me:secret \
+QUARRY_TEST_MYSQL=127.0.0.1:3306:test:me:secret \
+QUARRY_TEST_MSSQL=127.0.0.1:1433:test:sa:secret \
+cargo test live
+```
+
+Each pushes a table full of awkward values (quotes, backslashes, Unicode,
+BLOBs, a big int, text in an INTEGER column), pulls it back and compares.
 
 Linux needs the usual X11/Wayland libraries; file dialogs use the XDG desktop
 portal. If no portal is available, use **File → Open by Path…** and type paths
@@ -85,6 +175,7 @@ into the import/export dialogs.
 | Ctrl+S | Write changes |
 | Ctrl+Enter / F5 | Execute all SQL |
 | Shift+F5 | Execute current statement / selection |
+| Ctrl+E | Explain query plan |
 | Ctrl+R | Refresh |
 | Ctrl+L | Toggle SQL log |
 
@@ -96,6 +187,13 @@ src/
   app.rs           menus, toolbar, tabs, status bar, pending-changes flow
   db.rs            rusqlite wrapper: logging, savepoints, schema, pragmas, WAL, dump
   csv_io.rs        CSV read/infer/convert/import/export
+  er.rs            ER model, auto layout, SVG / Mermaid / DOT export
+  mock.rs          mock data generators, FK ordering, uniqueness
+  plan.rs          EXPLAIN QUERY PLAN parsing, classification, index advice
+  pipe/mod.rs      Data Pipe: jobs, type inference, push/pull, profiles
+  pipe/pg.rs       PostgreSQL driver
+  pipe/mysql.rs    MySQL / MariaDB driver
+  pipe/mssql.rs    SQL Server driver
   ui/structure.rs  Database Structure tab
   ui/browse.rs     Browse Data tab + cell editor
   ui/execute.rs    Execute SQL tab
@@ -103,14 +201,24 @@ src/
   ui/log.rs        SQL Log dock
   ui/dialogs.rs    Import, Export, Create Table, Create Index
   ui/widgets.rs    SQL highlighter, data grid
+  ui/er.rs         ER Diagram tab
+  ui/mock.rs       Generate Mock Data dialog
+  ui/plan_view.rs  painted query plan
+  ui/pipe.rs       Data Pipe tab
 ```
 
 Built with [egui/eframe](https://github.com/emilk/egui) 0.37,
 [rusqlite](https://github.com/rusqlite/rusqlite) 0.40 (SQLite 3.53 bundled),
-[csv](https://github.com/BurntSushi/rust-csv) and [rfd](https://github.com/PolyMeilex/rfd).
+[csv](https://github.com/BurntSushi/rust-csv), [rfd](https://github.com/PolyMeilex/rfd),
+[postgres](https://github.com/sfackler/rust-postgres), [mysql](https://github.com/blackbeam/rust-mysql-simple)
+and [tiberius](https://github.com/prisma/tiberius).
+
+Tested: the PostgreSQL 16 and MariaDB 10.11 round trips run against live
+servers. The SQL Server driver compiles and follows the same code path but has
+not yet been run against a live SQL Server.
 
 ## Not (yet) included vs DB4S
 
 Modify Table (ALTER-by-rebuild designer), SQLCipher encryption, plotting dock,
-remote/DBHub, attaching databases from the UI (works via Execute SQL), JSON
+DBHub, attaching databases from the UI (works via Execute SQL), JSON
 export, multiple SQL editor tabs, saved project files.

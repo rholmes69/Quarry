@@ -4,6 +4,10 @@
 mod app;
 mod csv_io;
 mod db;
+mod er;
+mod mock;
+mod pipe;
+mod plan;
 mod ui;
 
 fn main() -> eframe::Result<()> {

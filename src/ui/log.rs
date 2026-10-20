@@ -13,6 +13,7 @@ pub enum LogFilter {
     All,
     App,
     User,
+    Remote,
 }
 
 pub struct LogUi {
@@ -43,11 +44,13 @@ impl App {
                     LogFilter::All => "All",
                     LogFilter::App => "Application",
                     LogFilter::User => "User",
+                    LogFilter::Remote => "Remote server",
                 })
                 .show_ui(ui, |ui| {
                     ui.selectable_value(&mut self.log_ui.filter, LogFilter::All, "All");
                     ui.selectable_value(&mut self.log_ui.filter, LogFilter::App, "Application");
                     ui.selectable_value(&mut self.log_ui.filter, LogFilter::User, "User");
+                    ui.selectable_value(&mut self.log_ui.filter, LogFilter::Remote, "Remote server");
                 });
             ui.checkbox(&mut self.log_ui.errors_only, "Errors only");
             ui.add(egui::TextEdit::singleline(&mut self.log_ui.search).hint_text("Search…").desired_width(160.0));
@@ -93,6 +96,7 @@ impl App {
                 LogFilter::All => true,
                 LogFilter::App => l.source == LogSource::App,
                 LogFilter::User => l.source == LogSource::User,
+                LogFilter::Remote => l.source == LogSource::Remote,
             })
             .filter(|(_, l)| !self.log_ui.errors_only || !l.ok)
             .filter(|(_, l)| search.is_empty() || l.sql.to_lowercase().contains(&search))
@@ -128,6 +132,7 @@ impl App {
                         let (t, c) = match l.source {
                             LogSource::App => ("App", p.app),
                             LogSource::User => ("User", p.user),
+                            LogSource::Remote => ("Remote", p.ok),
                         };
                         ui.label(RichText::new(t).small().strong().color(c));
                     });

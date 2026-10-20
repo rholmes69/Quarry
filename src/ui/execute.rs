@@ -19,6 +19,9 @@ pub struct ExecState {
     pub run_requested: Option<bool>,
     pub row_limit: usize,
     pub selected: Option<(usize, usize)>,
+    pub plan: Option<Result<crate::plan::PlanAnalysis, String>>,
+    pub explain_requested: bool,
+    pub show_plan: bool,
 }
 
 impl Default for ExecState {
@@ -35,6 +38,9 @@ impl Default for ExecState {
             run_requested: None,
             row_limit: 100_000,
             selected: None,
+            plan: None,
+            explain_requested: false,
+            show_plan: false,
         }
     }
 }
@@ -76,6 +82,9 @@ impl App {
             if ui.button("▶ Execute current").on_hover_text("Shift+F5 — statement under cursor, or the selection").clicked() {
                 self.exec.run_requested = Some(true);
             }
+            if ui.button("🔍 Explain plan").on_hover_text("Ctrl+E — visual EXPLAIN QUERY PLAN for the statement under the cursor").clicked() {
+                self.exec.explain_requested = true;
+            }
             ui.separator();
             if ui.button("Clear").clicked() {
                 self.exec.sql.clear();
@@ -107,6 +116,10 @@ impl App {
         if let Some(current) = self.exec.run_requested.take() {
             let script = if current { self.exec.current_statement() } else { self.exec.sql.clone() };
             self.run_script(&script);
+            self.exec.show_plan = false;
+        }
+        if std::mem::take(&mut self.exec.explain_requested) {
+            self.explain_current();
         }
 
         let avail = ui.available_height();
@@ -143,7 +156,52 @@ impl App {
         });
         ui.separator();
 
-        // ---- results
+        // ---- results / plan switcher
+        ui.horizontal(|ui| {
+            if ui.selectable_label(!self.exec.show_plan, "Results").clicked() {
+                self.exec.show_plan = false;
+            }
+            let plan_label = match &self.exec.plan {
+                Some(Ok(a)) => match a.worst() {
+                    crate::plan::Severity::Bad => RichText::new("Query Plan ✖").color(p.err),
+                    crate::plan::Severity::Warn => RichText::new("Query Plan ⚠").color(p.warn),
+                    _ => RichText::new("Query Plan ✔").color(p.ok),
+                },
+                _ => RichText::new("Query Plan"),
+            };
+            if ui.selectable_label(self.exec.show_plan, plan_label).clicked() {
+                self.exec.show_plan = true;
+                if self.exec.plan.is_none() {
+                    self.exec.explain_requested = true;
+                }
+            }
+        });
+        if self.exec.show_plan {
+            match &self.exec.plan {
+                Some(Ok(a)) => {
+                    let a = a.clone();
+                    match crate::ui::plan_view::plan_view(ui, &a) {
+                        Some(crate::ui::plan_view::PlanAction::CreateIndex(t, cols)) => {
+                            self.create_index = Some(crate::ui::dialogs::CreateIndexDialog::suggested(t, cols));
+                        }
+                        Some(crate::ui::plan_view::PlanAction::Reexplain) => {
+                            self.exec.plan = Some(match self.db.as_mut() {
+                                Some(db) => crate::plan::explain(db, &a.sql),
+                                None => Err("No database".into()),
+                            });
+                        }
+                        None => {}
+                    }
+                }
+                Some(Err(e)) => {
+                    ui.colored_label(p.err, e);
+                }
+                None => {
+                    ui.label(RichText::new("Put the cursor in a statement and press 🔍 Explain plan (Ctrl+E).").weak());
+                }
+            }
+            return;
+        }
         match &self.exec.result {
             Some(r) if !r.columns.is_empty() => {
                 let id = format!("exec_grid_{}_{}", self.exec.result_sql.len(), r.columns.len());
@@ -170,6 +228,15 @@ impl App {
                 ui.label(RichText::new("Results of the last statement that returns rows appear here.").weak().small());
             }
         }
+    }
+
+    pub fn explain_current(&mut self) {
+        let stmt = self.exec.current_statement();
+        self.exec.plan = Some(match self.db.as_mut() {
+            Some(db) => crate::plan::explain(db, &stmt),
+            None => Err("No database open.".into()),
+        });
+        self.exec.show_plan = true;
     }
 
     fn run_script(&mut self, script: &str) {

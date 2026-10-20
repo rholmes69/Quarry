@@ -9,6 +9,7 @@ use egui::{Key, KeyboardShortcut, Modifiers, RichText, Ui};
 use crate::db::{as_text, Database, LogSource, ObjKind, SchemaObject};
 use crate::ui::browse::BrowseState;
 use crate::ui::dialogs::{CreateIndexDialog, CreateTableDialog, ExportDialog, ExportSource, ImportDialog};
+use crate::ui::er::ErState;
 use crate::ui::execute::ExecState;
 use crate::ui::log::LogUi;
 use crate::ui::pragmas::PragmaState;
@@ -19,8 +20,10 @@ use crate::ui::widgets::palette;
 pub enum Tab {
     Structure,
     Browse,
+    Er,
     Pragmas,
     Execute,
+    Pipe,
 }
 
 /// Actions that must wait for the user to decide what to do with pending changes.
@@ -45,14 +48,17 @@ pub struct App {
 
     pub structure: StructureState,
     pub browse: BrowseState,
+    pub er: ErState,
     pub exec: ExecState,
     pub pragmas: PragmaState,
     pub log_ui: LogUi,
+    pub pipe: crate::ui::pipe::PipeState,
 
     pub import: Option<ImportDialog>,
     pub export: Option<ExportDialog>,
     pub create_table: Option<CreateTableDialog>,
     pub create_index: Option<CreateIndexDialog>,
+    pub mock: Option<crate::ui::mock::MockDialog>,
     pub confirm: Option<Confirm>,
     pub open_path: Option<(String, bool)>,
     pub about: bool,
@@ -78,13 +84,16 @@ impl App {
             schema_dirty: false,
             structure: StructureState::default(),
             browse: BrowseState::default(),
+            er: ErState::default(),
             exec: ExecState::default(),
             pragmas: PragmaState::default(),
             log_ui: LogUi::default(),
+            pipe: crate::ui::pipe::PipeState::default(),
             import: None,
             export: None,
             create_table: None,
             create_index: None,
+            mock: None,
             confirm: None,
             open_path: None,
             about: false,
@@ -118,6 +127,7 @@ impl App {
         self.schema_dirty = true;
         self.browse.dirty = true;
         self.structure.details = None;
+        self.er.dirty = true;
         self.pragmas.loaded = false;
         self.pragmas.journal_mode_cache = None;
     }
@@ -176,6 +186,7 @@ impl App {
                 self.browse = BrowseState::default();
                 self.structure = StructureState::default();
                 self.pragmas = PragmaState::default();
+                self.er = ErState::default();
                 self.exec.outcomes.clear();
                 self.exec.result = None;
                 self.refresh_schema();
@@ -214,6 +225,15 @@ impl App {
             }
         }
         self.invalidate();
+    }
+
+    pub fn open_mock(&mut self, table: Option<String>) {
+        let tables: Vec<String> = self.tables(false).into_iter().filter(|t| !t.starts_with("sqlite_")).collect();
+        if tables.is_empty() {
+            self.error("Create a table first, then generate data for it.");
+            return;
+        }
+        self.mock = Some(crate::ui::mock::MockDialog::new(tables, table));
     }
 
     pub fn drop_object(&mut self, kind: ObjKind, name: &str) {
@@ -279,6 +299,10 @@ impl App {
 
     fn shortcuts(&mut self, ui: &mut Ui) {
         let sc = |m, k| KeyboardShortcut::new(m, k);
+        let explain = ui.input_mut(|i| i.consume_shortcut(&sc(Modifiers::COMMAND, Key::E)));
+        if explain && self.tab == Tab::Execute && self.db.is_some() {
+            self.exec.explain_requested = true;
+        }
         let (save, open, run, run_cur, run_f5, refresh, log) = ui.input_mut(|i| {
             (
                 i.consume_shortcut(&sc(Modifiers::COMMAND, Key::S)),
@@ -377,6 +401,11 @@ impl App {
                 }
                 if ui.add_enabled(has_db, egui::Button::new("Create Index…")).clicked() {
                     self.create_index = Some(CreateIndexDialog::new(self.structure.selected_table(&self.schema)));
+                    ui.close();
+                }
+                ui.separator();
+                if ui.add_enabled(has_db && !self.db.as_ref().unwrap().read_only, egui::Button::new("Generate Mock Data…")).clicked() {
+                    self.open_mock(self.structure.selected_table(&self.schema).or(self.browse.table.clone()));
                     ui.close();
                 }
             });
@@ -480,8 +509,10 @@ impl App {
             for (t, label) in [
                 (Tab::Structure, "Database Structure"),
                 (Tab::Browse, "Browse Data"),
+                (Tab::Er, "ER Diagram"),
                 (Tab::Pragmas, "Edit Pragmas"),
                 (Tab::Execute, "Execute SQL"),
+                (Tab::Pipe, "Data Pipe"),
             ] {
                 let selected = self.tab == t;
                 let text = if selected { RichText::new(label).strong() } else { RichText::new(label) };
@@ -663,6 +694,7 @@ impl eframe::App for App {
             self.refresh_schema();
         }
         self.shortcuts(ui);
+        self.pipe_poll(&ctx);
 
         egui::Panel::top("menu").show(ui, |ui| {
             self.menu_bar(ui);
@@ -687,8 +719,10 @@ impl eframe::App for App {
             match self.tab {
                 Tab::Structure => self.structure_tab(ui),
                 Tab::Browse => self.browse_tab(ui),
+                Tab::Er => self.er_tab(ui),
                 Tab::Pragmas => self.pragmas_tab(ui),
                 Tab::Execute => self.execute_tab(ui),
+                Tab::Pipe => self.pipe_tab(ui),
             }
         });
 

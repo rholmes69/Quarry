@@ -28,6 +28,8 @@ pub enum LogSource {
     App,
     /// Typed by the user in the Execute SQL tab.
     User,
+    /// Sent to a remote server by Data Pipe.
+    Remote,
 }
 
 #[derive(Clone, Debug)]
@@ -105,6 +107,8 @@ pub struct IndexInfo {
 
 #[derive(Clone, Debug)]
 pub struct ForeignKey {
+    /// Groups the columns of a composite foreign key.
+    pub id: i64,
     pub table: String,
     pub from: String,
     pub to: String,
@@ -551,6 +555,7 @@ impl Database {
         let fks = self.query(LogSource::App, &format!("PRAGMA foreign_key_list({q});"), &[])?;
         for row in fks.rows {
             d.foreign_keys.push(ForeignKey {
+                id: as_int(&row[0]),
                 table: as_text(&row[2]),
                 from: as_text(&row[3]),
                 to: as_text(&row[4]),

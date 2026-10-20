@@ -331,6 +331,7 @@ pub struct CreateIndexDialog {
     columns: Vec<(String, bool, bool)>,
     loaded_for: String,
     where_clause: String,
+    preselect: Vec<String>,
 }
 
 impl CreateIndexDialog {
@@ -343,7 +344,15 @@ impl CreateIndexDialog {
             columns: vec![],
             loaded_for: String::new(),
             where_clause: String::new(),
+            preselect: vec![],
         }
+    }
+
+    /// Pre-filled from a query-plan suggestion.
+    pub fn suggested(table: String, columns: Vec<String>) -> Self {
+        let mut d = Self::new(Some(table));
+        d.preselect = columns;
+        d
     }
 
     fn sql(&self) -> String {
@@ -402,6 +411,11 @@ impl App {
         if let Some(mut d) = self.create_index.take() {
             if self.create_index_window(ctx, &mut d) {
                 self.create_index = Some(d);
+            }
+        }
+        if let Some(mut d) = self.mock.take() {
+            if self.mock_window(ctx, &mut d) {
+                self.mock = Some(d);
             }
         }
     }
@@ -810,6 +824,14 @@ impl App {
                 .and_then(|db| db.table_details(&d.table).ok())
                 .map(|t| t.columns.into_iter().map(|c| (c.name, false, false)).collect())
                 .unwrap_or_default();
+            // suggested columns first, in suggestion order, ticked
+            for (k, want) in d.preselect.iter().enumerate() {
+                if let Some(i) = d.columns.iter().position(|c| c.0.eq_ignore_ascii_case(want)) {
+                    let mut c = d.columns.remove(i);
+                    c.1 = true;
+                    d.columns.insert(k.min(d.columns.len()), c);
+                }
+            }
         }
         egui::Window::new("Create Index")
             .open(&mut open)

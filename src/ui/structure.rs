@@ -37,6 +37,9 @@ impl App {
             if ui.add_enabled(!read_only, egui::Button::new("➕ Create Index")).clicked() {
                 self.create_index = Some(CreateIndexDialog::new(self.structure.selected_table(&self.schema)));
             }
+            if ui.add_enabled(!read_only && !self.schema.is_empty(), egui::Button::new("🎲 Mock Data")).on_hover_text("Generate realistic test rows").clicked() {
+                self.open_mock(self.structure.selected_table(&self.schema));
+            }
             let sel = self.structure.selected.clone();
             let can_drop = !read_only && sel.as_ref().is_some_and(|(_, n)| !n.starts_with("sqlite_"));
             if ui.add_enabled(can_drop, egui::Button::new("🗑 Drop")).clicked() {
@@ -108,6 +111,10 @@ impl App {
                                     ui.close();
                                 }
                             }
+                            if kind == ObjKind::Table && ui.button("Generate Mock Data…").clicked() {
+                                action = Some(TreeAction::Mock(o.name.clone()));
+                                ui.close();
+                            }
                             if kind == ObjKind::Table && ui.button("Create Index…").clicked() {
                                 action = Some(TreeAction::Index(o.name.clone()));
                                 ui.close();
@@ -137,6 +144,7 @@ impl App {
                 self.tab = Tab::Browse;
             }
             Some(TreeAction::Export(n)) => self.export = Some(ExportDialog::new(ExportSource::Table(n))),
+            Some(TreeAction::Mock(n)) => self.open_mock(Some(n)),
             Some(TreeAction::Index(n)) => self.create_index = Some(CreateIndexDialog::new(Some(n))),
             Some(TreeAction::Drop(k, n)) => self.confirm = Some(Confirm::Drop(k, n)),
             None => {}
@@ -265,6 +273,7 @@ enum TreeAction {
     Browse(String),
     Export(String),
     Index(String),
+    Mock(String),
     Drop(ObjKind, String),
 }
 
