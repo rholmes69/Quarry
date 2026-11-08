@@ -527,10 +527,10 @@ impl App {
         let has_db = self.db.is_some();
         let pending = self.has_pending();
         ui.horizontal(|ui| {
-            if ui.button("🗋 New Database").clicked() {
+            if ui.button("📄 New Database").clicked() {
                 self.pick_new();
             }
-            if ui.button("🗁 Open Database").on_hover_text("Ctrl+O").clicked() {
+            if ui.button("📂 Open Database").on_hover_text("Ctrl+O").clicked() {
                 self.pick_open(false);
             }
             let p = palette(ui);
@@ -628,10 +628,10 @@ impl App {
             ui.horizontal(|ui| {
                 let w = 420.0;
                 ui.add_space((ui.available_width() - w).max(0.0) / 2.0);
-                if ui.button("🗋  New Database…").clicked() {
+                if ui.button("📄  New Database…").clicked() {
                     self.pick_new();
                 }
-                if ui.button("🗁  Open Database…").clicked() {
+                if ui.button("📂  Open Database…").clicked() {
                     self.pick_open(false);
                 }
                 if ui.button("Open by Path…").clicked() {
